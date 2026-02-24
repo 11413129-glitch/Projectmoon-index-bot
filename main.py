@@ -149,4 +149,5 @@ async def on_ready():
     print(f"食指命令分配系統 v5.1 已啟動：{bot.user}")
     check_deadlines.start()
 
+
 bot.run(TOKEN)
