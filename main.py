@@ -6,7 +6,9 @@ import random
 import datetime
 import sqlite3
 
-# --- 讀取 Token ---
+# ======================
+# 讀取 Token
+# ======================
 TOKEN = os.getenv("bot_token")
 
 intents = discord.Intents.default()
@@ -14,11 +16,11 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-TERMINAL_VERSION = "THE INDEX TERMINAL v8.0"
+TERMINAL_VERSION = "THE INDEX TERMINAL v9.0"
 
-# =========================
+# ======================
 # SQLite 永久資料庫
-# =========================
+# ======================
 
 conn = sqlite3.connect("index_data.db")
 cursor = conn.cursor()
@@ -44,15 +46,14 @@ CREATE TABLE IF NOT EXISTS commands (
 
 conn.commit()
 
-# =========================
-# 10000 完全隨機指令池
-# =========================
+# ======================
+# 10000 隨機指令池
+# ======================
 
 PEOPLE = [f"person #{i}" for i in range(1,51)]
 ITEMS = [f"item #{i}" for i in range(1,51)]
 ANIMALS = [f"animal #{i}" for i in range(1,51)]
 OBJECTS = [f"object #{i}" for i in range(1,51)]
-
 COLORS = ["red","blue","green","yellow","orange","purple","black","white"]
 TIMES = ["midnight","dawn","noon","evening","sunset","morning"]
 NUMBERS = [random.randint(1,500) for _ in range(50)]
@@ -83,9 +84,9 @@ for _ in range(10000):
         minutes=random.choice(MINUTES)
     ))
 
-# =========================
+# ======================
 # 工具函式
-# =========================
+# ======================
 
 def get_user(user_id):
     cursor.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
@@ -137,14 +138,15 @@ def generate_command(user_id):
 
     return command_text, deviation, deadline
 
-# =========================
+# ======================
 # Slash Commands
-# =========================
+# ======================
 
 @tree.command(name="指令", description="生成食指命令")
 async def command(interaction: discord.Interaction, member: discord.Member):
 
     command_text, deviation, deadline = generate_command(member.id)
+    unix_time = int(deadline.timestamp())
 
     await interaction.response.send_message(f"""
 [{TERMINAL_VERSION}]
@@ -154,7 +156,10 @@ async def command(interaction: discord.Interaction, member: discord.Member):
 
 {command_text}
 
-截止時間：{deadline.strftime("%H:%M:%S")}
+截止時間：
+<t:{unix_time}:F>
+剩餘時間：
+<t:{unix_time}:R>
 """)
 
 @tree.command(name="完成", description="完成命令")
@@ -167,7 +172,6 @@ async def complete(interaction: discord.Interaction):
     stability = min(100, stability + 2)
 
     update_user(interaction.user.id, completed, disobeyed, stability)
-
     cursor.execute("UPDATE commands SET status='已完成' WHERE user_id=?", (interaction.user.id,))
     conn.commit()
 
@@ -188,6 +192,43 @@ async def disobey(interaction: discord.Interaction):
 
     await interaction.response.send_message("⚠ 偵測到違抗。")
 
+    if stability <= 20 or disobeyed >= 5:
+
+        outcome = random.randint(1, 100)
+
+        if outcome <= 50:
+            stability = 0
+            color = discord.Color.dark_red()
+            title = "⚖ 食指審判：清除"
+            description = "此個體被判定為偏移不可修正。\n已標記為清除對象。"
+
+        elif outcome <= 85:
+            stability += 15
+            color = discord.Color.orange()
+            title = "⚖ 食指審判：觀測延長"
+            description = "給予一次修正機會。\n偏移軌跡重新計算。"
+
+        else:
+            stability = 100
+            disobeyed = 0
+            color = discord.Color.gold()
+            title = "⚖ 食指審判：完全重置"
+            description = "軌跡已重新校準。\n違抗紀錄清除。"
+
+        update_user(interaction.user.id, completed, disobeyed, stability)
+
+        embed = discord.Embed(
+            title=title,
+            description=description,
+            color=color
+        )
+
+        embed.add_field(name="目前穩定度", value=str(stability), inline=False)
+        embed.add_field(name="目前階級", value=get_rank(stability, disobeyed), inline=False)
+        embed.set_footer(text="THE INDEX JUDGEMENT SYSTEM")
+
+        await interaction.followup.send(embed=embed)
+
 @tree.command(name="狀態", description="查看狀態")
 async def status(interaction: discord.Interaction):
 
@@ -201,11 +242,11 @@ async def status(interaction: discord.Interaction):
 穩定度：{user[3]}
 """, ephemeral=True)
 
-# =========================
+# ======================
 
 @client.event
 async def on_ready():
     await tree.sync()
-    print("Index Terminal v8 已啟動")
+    print("Index Terminal v9 已啟動")
 
 client.run(TOKEN)
