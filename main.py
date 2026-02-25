@@ -6,22 +6,20 @@ import random
 import datetime
 import sqlite3
 
-# ======================
-# 讀取 Token
-# ======================
+# =====================
+# Token
+# =====================
 TOKEN = os.getenv("bot_token")
 
 intents = discord.Intents.default()
-intents.message_content = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-TERMINAL_VERSION = "THE INDEX TERMINAL v9.0"
+TERMINAL_VERSION = "THE INDEX TERMINAL v10.0"
 
-# ======================
-# SQLite 永久資料庫
-# ======================
-
+# =====================
+# SQLite
+# =====================
 conn = sqlite3.connect("index_data.db")
 cursor = conn.cursor()
 
@@ -46,47 +44,9 @@ CREATE TABLE IF NOT EXISTS commands (
 
 conn.commit()
 
-# ======================
-# 10000 隨機指令池
-# ======================
-
-PEOPLE = [f"person #{i}" for i in range(1,51)]
-ITEMS = [f"item #{i}" for i in range(1,51)]
-ANIMALS = [f"animal #{i}" for i in range(1,51)]
-OBJECTS = [f"object #{i}" for i in range(1,51)]
-COLORS = ["red","blue","green","yellow","orange","purple","black","white"]
-TIMES = ["midnight","dawn","noon","evening","sunset","morning"]
-NUMBERS = [random.randint(1,500) for _ in range(50)]
-DISTANCES = [random.randint(1,500) for _ in range(50)]
-MINUTES = [random.randint(1,20) for _ in range(50)]
-
-TEMPLATES = [
-    "Approach {person} holding {item} at {time}.",
-    "Observe {animal} for {minutes} minutes.",
-    "Move {distance1}m then {distance2}m and hide behind {object}.",
-    "Shout at {person} {number} times.",
-    "Wear a {color} ribbon and wait."
-]
-
-COMMAND_POOL = []
-for _ in range(10000):
-    template = random.choice(TEMPLATES)
-    COMMAND_POOL.append(template.format(
-        person=random.choice(PEOPLE),
-        item=random.choice(ITEMS),
-        animal=random.choice(ANIMALS),
-        object=random.choice(OBJECTS),
-        color=random.choice(COLORS),
-        time=random.choice(TIMES),
-        number=random.choice(NUMBERS),
-        distance1=random.choice(DISTANCES),
-        distance2=random.choice(DISTANCES),
-        minutes=random.choice(MINUTES)
-    ))
-
-# ======================
+# =====================
 # 工具函式
-# ======================
+# =====================
 
 def get_user(user_id):
     cursor.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
@@ -118,11 +78,164 @@ def get_rank(stability, disobeyed):
     else:
         return "待清除異常"
 
+# =====================
+# 指令池（每項 >= 30）
+# =====================
+
+DAY_LOCATIONS = [
+"人行道邊緣","商店門口","第二個路口","公車站旁","斑馬線中央",
+"玻璃櫥窗前","咖啡店外","街角轉彎處","市場入口","高樓陰影下",
+"銀行前階梯","便利商店外","天橋入口","公園長椅旁","地下道出口",
+"郵局門前","十字路口中央","書店旁","電影院外牆","紅磚牆邊",
+"廣場中央","辦公大樓前","車站大廳","停車場邊緣","鐵門旁",
+"街燈下","行道樹旁","施工圍欄外","報攤旁","商場入口"
+]
+
+NIGHT_LOCATIONS = [
+"無人巷道","天橋陰影下","熄燈建築外","封閉鐵門前","地下停車場",
+"橋墩下","廢棄店面前","屋頂邊緣","空曠廣場","路燈閃爍處",
+"夜市角落","河岸邊","隧道出口","黑暗樓梯間","舊倉庫旁",
+"寂靜公園","雨遮陰影下","大樓後巷","關閉商場外","施工工地邊",
+"停駛車輛旁","月光照射處","破舊牆面前","鐵橋中央","昏暗騎樓",
+"停電街區","夜間便利店外","舊劇院前","陰暗樓道","空蕩月台"
+]
+
+NEUTRAL_ACTIONS = [
+"停留三分鐘","保持沉默","觀察周圍動靜","確認目標是否回頭",
+"不得與任何人交談","等待下一次鐘聲","站在原地不動",
+"記住經過的三個人","放慢呼吸","避免與他人對視",
+"記錄時間","聽取環境聲音","確認出口位置","保持距離",
+"調整步伐","觀察天空變化","注意影子方向","計算路人數量",
+"觀察光線變化","等待信號","記下車輛顏色","確認手機時間",
+"數到二十","確認是否被注視","注意腳步聲","檢查四周門窗",
+"觀察標誌","確認風向","保持冷靜","聆聽遠方聲響"
+]
+
+HIGH_LEVEL_ACTIONS = [
+"干涉目標的決定","使對方改變行進方向","製造一次微小秩序偏移",
+"阻止既定事件發生","迫使對方停下腳步","延遲某個結果的發生",
+"讓一段對話無法完成","確保某人錯過關鍵時刻","打斷既定流程",
+"製造錯誤選擇","讓秩序產生裂痕","干預一次決策",
+"改變一條行進軌跡","引發不確定因素","擾亂一次計畫",
+"改寫當下選擇","讓某個信號無法傳達","引導事件轉向",
+"迫使時間延後","阻止訊息到達","打亂節奏","重置一次節點",
+"迫使事件重來","使秩序鬆動","擾動命運線",
+"讓目標產生猶豫","阻斷交集","改變既定步伐","讓錯誤發生"
+]
+
+TIME_DAY = [
+"在紅燈亮起時","於人群最密集時","當陽光照射街道時",
+"在鐘聲響起後","於正午之前","當影子最短時",
+"在人聲最吵雜時","於第一班車到站時","當廣播響起時",
+"於午餐時段","在門開啟瞬間","於工作開始時",
+"在排隊最長時","當街燈尚未亮起時","於下午之前",
+"當雲層遮住陽光時","於三分鐘內","在步行途中",
+"當車流減少時","於轉角之前","當警示聲響起時",
+"於商店開門時","在收銀聲響起後","當音樂停止時",
+"於廣場鐘聲後","在第一聲喇叭聲後","於門關閉前",
+"在雨未落下時","於公告結束後","當電梯開門時"
+]
+
+TIME_NIGHT = [
+"在路燈熄滅後","於午夜鐘響時","當街道完全安靜時",
+"在最後一班車離開後","於夜色最深時","當月光最亮時",
+"在廣播結束後","於雨聲停止時","當影子消失時",
+"於零點之前","在霧氣瀰漫時","當霓虹燈閃爍時",
+"於警報聲後","在門上鎖後","當腳步聲遠去時",
+"於夜班交接時","在空氣變冷時","當風停止時",
+"於街道無人時","在燈光轉暗時","當最後一扇窗熄燈時",
+"於凌晨之前","在月亮升起時","當遠方傳來回音時",
+"於沉默之後","在低語停止時","當鐘聲回蕩時",
+"於黑暗完全降臨時","在夜雨開始時","當星光出現時"
+]
+
+MAJOR_COMMANDS = [
+"確保某件物品不再存在於此街區。",
+"讓該區域的秩序產生一次不可逆偏移。",
+"阻止命運進入下一階段。",
+"於日落前干涉目標的既定選擇。",
+"迫使一次關鍵事件中止。",
+"使某人失去原本的路線。",
+"讓時間錯開原本的節點。",
+"切斷一段正在形成的聯繫。",
+"迫使選擇改變方向。",
+"讓秩序崩解一瞬間。",
+"引發一次重大偏移。",
+"使結果延後發生。",
+"讓決定無法成立。",
+"打破既定因果。",
+"重寫此區域的軌跡。",
+"迫使命運轉向。",
+"阻斷一次交會。",
+"讓未來產生裂縫。",
+"迫使關鍵人物停下。",
+"讓節點消失。",
+"製造一次重大錯誤。",
+"使時間停滯片刻。",
+"引發無法預測的變化。",
+"改寫一段命運線。",
+"阻止關鍵相遇。",
+"讓某人失去機會。",
+"迫使秩序重新排列。",
+"打斷一次重要對話。",
+"讓未來改變方向。",
+"使原本的結局失效。"
+]
+
+# =====================
+# 生成指令
+# =====================
+
 def generate_command(user_id):
+
     user = get_user(user_id)
-    deviation = round(random.uniform(5,30) + user[2]*5,2)
-    deadline = datetime.datetime.now() + datetime.timedelta(minutes=random.randint(3,8))
-    command_text = random.choice(COMMAND_POOL)
+    disobeyed = user[2]
+    stability = user[3]
+
+    now = datetime.datetime.now()
+    hour = now.hour
+
+    time_mode = "day" if 6 <= hour < 18 else "night"
+
+    difficulty = "high" if stability >= 85 else "normal"
+
+    major_chance = 0.10
+    if time_mode == "night":
+        major_chance += 0.05
+    if stability >= 90:
+        major_chance += 0.05
+
+    is_major = random.random() < major_chance
+
+    if is_major:
+        command_text = random.choice(MAJOR_COMMANDS)
+        deviation = round(random.uniform(30, 60) + disobeyed * 8, 2)
+    else:
+        if time_mode == "day":
+            location = random.choice(DAY_LOCATIONS)
+            time_trigger = random.choice(TIME_DAY)
+        else:
+            location = random.choice(NIGHT_LOCATIONS)
+            time_trigger = random.choice(TIME_NIGHT)
+
+        action_pool = HIGH_LEVEL_ACTIONS if difficulty == "high" else NEUTRAL_ACTIONS
+        action = random.choice(action_pool)
+
+        template = random.choice([
+            "{time}前往{location}，{action}。",
+            "進入{location}並{action}。",
+            "於{location}{action}。"
+        ])
+
+        command_text = template.format(
+            time=time_trigger,
+            location=location,
+            action=action
+        )
+
+        deviation = round(random.uniform(5, 25) + disobeyed * 5, 2)
+
+    deadline = now + datetime.timedelta(minutes=random.randint(4, 10))
 
     cursor.execute("""
     INSERT OR REPLACE INTO commands
@@ -136,117 +249,37 @@ def generate_command(user_id):
     ))
     conn.commit()
 
-    return command_text, deviation, deadline
+    return command_text, deviation, deadline, is_major
 
-# ======================
-# Slash Commands
-# ======================
+# =====================
+# Slash 指令
+# =====================
 
 @tree.command(name="指令", description="生成食指命令")
 async def command(interaction: discord.Interaction, member: discord.Member):
 
-    command_text, deviation, deadline = generate_command(member.id)
+    command_text, deviation, deadline, is_major = generate_command(member.id)
     unix_time = int(deadline.timestamp())
 
-    await interaction.response.send_message(f"""
-[{TERMINAL_VERSION}]
-目標：{member.name}
+    color = discord.Color.dark_red() if is_major else discord.Color.dark_grey()
+    title = "⚠ 重大指令" if is_major else "食指命令"
 
-偏移值：{deviation}%
+    embed = discord.Embed(
+        title=title,
+        description=command_text,
+        color=color
+    )
 
-{command_text}
+    embed.add_field(name="目標", value=member.name, inline=False)
+    embed.add_field(name="偏移值", value=f"{deviation}%", inline=False)
+    embed.add_field(name="截止時間", value=f"<t:{unix_time}:F>\n<t:{unix_time}:R>", inline=False)
+    embed.set_footer(text=TERMINAL_VERSION)
 
-截止時間：
-<t:{unix_time}:F>
-剩餘時間：
-<t:{unix_time}:R>
-""")
-
-@tree.command(name="完成", description="完成命令")
-async def complete(interaction: discord.Interaction):
-
-    user = get_user(interaction.user.id)
-    completed, disobeyed, stability = user[1], user[2], user[3]
-
-    completed += 1
-    stability = min(100, stability + 2)
-
-    update_user(interaction.user.id, completed, disobeyed, stability)
-    cursor.execute("UPDATE commands SET status='已完成' WHERE user_id=?", (interaction.user.id,))
-    conn.commit()
-
-    await interaction.response.send_message("命令執行成功。")
-
-@tree.command(name="違抗", description="違抗命令")
-async def disobey(interaction: discord.Interaction):
-
-    user = get_user(interaction.user.id)
-    completed, disobeyed, stability = user[1], user[2], user[3]
-
-    disobeyed += 1
-    stability -= 10
-    if stability < 0:
-        stability = 0
-
-    update_user(interaction.user.id, completed, disobeyed, stability)
-
-    await interaction.response.send_message("⚠ 偵測到違抗。")
-
-    if stability <= 20 or disobeyed >= 5:
-
-        outcome = random.randint(1, 100)
-
-        if outcome <= 50:
-            stability = 0
-            color = discord.Color.dark_red()
-            title = "⚖ 食指審判：清除"
-            description = "此個體被判定為偏移不可修正。\n已標記為清除對象。"
-
-        elif outcome <= 85:
-            stability += 15
-            color = discord.Color.orange()
-            title = "⚖ 食指審判：觀測延長"
-            description = "給予一次修正機會。\n偏移軌跡重新計算。"
-
-        else:
-            stability = 100
-            disobeyed = 0
-            color = discord.Color.gold()
-            title = "⚖ 食指審判：完全重置"
-            description = "軌跡已重新校準。\n違抗紀錄清除。"
-
-        update_user(interaction.user.id, completed, disobeyed, stability)
-
-        embed = discord.Embed(
-            title=title,
-            description=description,
-            color=color
-        )
-
-        embed.add_field(name="目前穩定度", value=str(stability), inline=False)
-        embed.add_field(name="目前階級", value=get_rank(stability, disobeyed), inline=False)
-        embed.set_footer(text="THE INDEX JUDGEMENT SYSTEM")
-
-        await interaction.followup.send(embed=embed)
-
-@tree.command(name="狀態", description="查看狀態")
-async def status(interaction: discord.Interaction):
-
-    user = get_user(interaction.user.id)
-    rank = get_rank(user[3], user[2])
-
-    await interaction.response.send_message(f"""
-階級：{rank}
-完成：{user[1]}
-違抗：{user[2]}
-穩定度：{user[3]}
-""", ephemeral=True)
-
-# ======================
+    await interaction.response.send_message(embed=embed)
 
 @client.event
 async def on_ready():
     await tree.sync()
-    print("Index Terminal v9 已啟動")
+    print("Index Terminal v10 已啟動")
 
 client.run(TOKEN)
