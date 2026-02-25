@@ -1,75 +1,76 @@
-# ── Project Moon Discord Bot vPrescript ──
 from dotenv import load_dotenv
 import os
 import discord
-from discord.ext import commands, tasks
+from discord import app_commands
 import random
 import datetime
+import sqlite3
 
-# --- 讀取 .env Token ---
+# --- 讀取 Token ---
 TOKEN = os.getenv("bot_token")
 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix=">", intents=intents)
+client = discord.Client(intents=intents)
+tree = app_commands.CommandTree(client)
 
-TERMINAL_VERSION = "THE INDEX TERMINAL v6.1"
+TERMINAL_VERSION = "THE INDEX TERMINAL v8.0"
 
-# --- 記憶體資料庫 ---
-commands_db = {}
-stats_db = {}
+# =========================
+# SQLite 永久資料庫
+# =========================
 
-# --- 完全隨機元素庫，每個庫 50 個 ---
+conn = sqlite3.connect("index_data.db")
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    completed INTEGER DEFAULT 0,
+    disobeyed INTEGER DEFAULT 0,
+    stability INTEGER DEFAULT 100
+)
+""")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS commands (
+    user_id INTEGER PRIMARY KEY,
+    command TEXT,
+    deviation REAL,
+    deadline TEXT,
+    status TEXT
+)
+""")
+
+conn.commit()
+
+# =========================
+# 10000 完全隨機指令池
+# =========================
+
 PEOPLE = [f"person #{i}" for i in range(1,51)]
 ITEMS = [f"item #{i}" for i in range(1,51)]
 ANIMALS = [f"animal #{i}" for i in range(1,51)]
 OBJECTS = [f"object #{i}" for i in range(1,51)]
-COLORS = [
-    "red","blue","green","yellow","orange","purple","black","white","scarlet","tan",
-    "pink","grey","maroon","cyan","magenta","lime","olive","navy","teal","indigo",
-    "violet","gold","silver","bronze","beige","peach","lavender","coral","turquoise",
-    "amber","cream","chocolate","plum","rose","mustard","mint","apricot","charcoal",
-    "cerulean","fuchsia","jade","sapphire","ruby","emerald","topaz","onyx","copper",
-    "pearl","ivory","rust","burgundy"
-]
-TIMES = [
-    "midnight","dawn","noon","evening","sunset","morning","twilight","late night",
-    "pre-dawn","early morning","late morning","mid-morning","sunrise","midday",
-    "afternoon","evening dusk","midnight quiet","mid-afternoon","evening prime",
-    "twilight dusk","late evening","early dusk","late noon","pre-midnight","sunrise early",
-    "morning prime","noonish","midnight hour","twilight hour","dawn light","morning fog",
-    "evening calm","sunset bright","late afternoon","midday sun","pre-noon","mid-evening",
-    "dusk light","twilight calm","late night fog","early morning mist","sunrise glow",
-    "mid-morning light","noon bright","evening shadow","nightfall","pre-dawn light","dawn quiet"
-]
+
+COLORS = ["red","blue","green","yellow","orange","purple","black","white"]
+TIMES = ["midnight","dawn","noon","evening","sunset","morning"]
 NUMBERS = [random.randint(1,500) for _ in range(50)]
 DISTANCES = [random.randint(1,500) for _ in range(50)]
 MINUTES = [random.randint(1,20) for _ in range(50)]
 
-# --- 指令模板 ---
-SENTENCE_TEMPLATES = [
-    "Take a step and go on a date with {person} holding {item}. Shortly, measure their height.",
-    "Next time you are angry, scream at {person} {number} times.",
-    "Without drawing attention to yourself, wait for the {number}th person you come across to leave.",
-    "Wear a {color} ribbon and confirm that no one is watching and hide behind {object}. Do not check the time again.",
-    "At {time}, walk slowly and grab hold of {person} and get their name, then ignore them entirely.",
-    "If the {item} is missing, stop listening and eat only foods that are {color}. Return home directly after.",
-    "Observe the closest {animal} from a distance for {minutes} minutes.",
-    "Look at the nearest {object} and bind your wrists together for {minutes} minutes.",
-    "While using a pack of {item}, avoid thinking about it and hop like a bunny to whoever notices you first.",
-    "Walk {distance1} meters, then {distance2} meters in any direction, betray a friend without speaking.",
-    "Pick up the {object} and carry it to {person} silently at {time}.",
-    "Trace {animal} quietly, tie a {color} ribbon around {item}, and wait for {minutes} minutes.",
-    "Approach {person} holding {object} and report their reaction immediately.",
-    "Crouch behind {object} and observe {animal} until {time}.",
-    "Move {distance1} meters, then {distance2} meters, then hide in {object} for {minutes} minutes."
+TEMPLATES = [
+    "Approach {person} holding {item} at {time}.",
+    "Observe {animal} for {minutes} minutes.",
+    "Move {distance1}m then {distance2}m and hide behind {object}.",
+    "Shout at {person} {number} times.",
+    "Wear a {color} ribbon and wait."
 ]
 
-# --- 生成一億條完整指令 ---
 COMMAND_POOL = []
-for _ in range(100000000):
-    template = random.choice(SENTENCE_TEMPLATES)
-    command = template.format(
+for _ in range(10000):
+    template = random.choice(TEMPLATES)
+    COMMAND_POOL.append(template.format(
         person=random.choice(PEOPLE),
         item=random.choice(ITEMS),
         animal=random.choice(ANIMALS),
@@ -80,143 +81,131 @@ for _ in range(100000000):
         distance1=random.choice(DISTANCES),
         distance2=random.choice(DISTANCES),
         minutes=random.choice(MINUTES)
-    )
-    COMMAND_POOL.append(command)
+    ))
 
-# --- 使用者狀態 ---
-def get_user_stats(user_id):
-    if user_id not in stats_db:
-        stats_db[user_id] = {
-            "completed": 0,
-            "disobeyed": 0,
-            "stability": 100
-        }
-    return stats_db[user_id]
+# =========================
+# 工具函式
+# =========================
 
-# --- 階級系統 ---
-def get_rank(stats):
-    s = stats["stability"]
-    d = stats["disobeyed"]
-    if s >= 95 and d == 0:
+def get_user(user_id):
+    cursor.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+    user = cursor.fetchone()
+    if not user:
+        cursor.execute("INSERT INTO users (user_id) VALUES (?)", (user_id,))
+        conn.commit()
+        return (user_id, 0, 0, 100)
+    return user
+
+def update_user(user_id, completed, disobeyed, stability):
+    cursor.execute("""
+    UPDATE users SET completed=?, disobeyed=?, stability=?
+    WHERE user_id=?
+    """, (completed, disobeyed, stability, user_id))
+    conn.commit()
+
+def get_rank(stability, disobeyed):
+    if stability >= 95 and disobeyed == 0:
         return "完美指向者"
-    elif s >= 80:
+    elif stability >= 80:
         return "高位執行者"
-    elif s >= 60:
+    elif stability >= 60:
         return "標準執行者"
-    elif s >= 40:
+    elif stability >= 40:
         return "偏移觀測體"
-    elif s > 0:
+    elif stability > 0:
         return "重大偏移個體"
     else:
         return "待清除異常"
 
-# --- 食指審判事件 ---
-async def judgement_event(ctx, stats):
-    outcome = random.randint(1,100)
-    if outcome <= 50:
-        stats["stability"] = 0
-        await ctx.send("⚠ 食指審判啟動\n⚠ 判定結果：清除\n此個體將被完全標記。")
-    elif outcome <= 85:
-        stats["stability"] += 15
-        await ctx.send("⚠ 食指審判啟動\n⚠ 判定結果：觀測延長\n給予一次修正機會。")
-    else:
-        stats["stability"] = 100
-        stats["disobeyed"] = 0
-        await ctx.send("⚠ 食指審判啟動\n⚠ 判定結果：完全重置\n軌跡已被重新校準。")
-
-# --- 產生命令 ---
 def generate_command(user_id):
-    stats = get_user_stats(user_id)
-    deviation = round(random.uniform(5,30) + stats["disobeyed"]*5,2)
+    user = get_user(user_id)
+    deviation = round(random.uniform(5,30) + user[2]*5,2)
     deadline = datetime.datetime.now() + datetime.timedelta(minutes=random.randint(3,8))
     command_text = random.choice(COMMAND_POOL)
-    data = {
-        "command": command_text,
-        "deviation": deviation,
-        "deadline": deadline,
-        "status": "待執行"
-    }
-    commands_db[user_id] = data
-    return data
 
-# --- Discord 指令 ---
-@bot.command()
-async def 指令(ctx, member: discord.Member):
-    data = generate_command(member.id)
-    output = f"""
+    cursor.execute("""
+    INSERT OR REPLACE INTO commands
+    VALUES (?, ?, ?, ?, ?)
+    """, (
+        user_id,
+        command_text,
+        deviation,
+        deadline.isoformat(),
+        "待執行"
+    ))
+    conn.commit()
+
+    return command_text, deviation, deadline
+
+# =========================
+# Slash Commands
+# =========================
+
+@tree.command(name="指令", description="生成食指命令")
+async def command(interaction: discord.Interaction, member: discord.Member):
+
+    command_text, deviation, deadline = generate_command(member.id)
+
+    await interaction.response.send_message(f"""
 [{TERMINAL_VERSION}]
 目標：{member.name}
 
-> 正在計算命運軌跡...
-> 偏移值：{data['deviation']}%
+偏移值：{deviation}%
 
-> 發佈指令：
-{data['command']}
+{command_text}
 
-> 截止時間：
-{data['deadline'].strftime("%H:%M:%S")}
+截止時間：{deadline.strftime("%H:%M:%S")}
+""")
 
-> 狀態：待執行
-"""
-    await ctx.send(output)
+@tree.command(name="完成", description="完成命令")
+async def complete(interaction: discord.Interaction):
 
-@bot.command()
-async def 完成(ctx):
-    user_id = ctx.author.id
-    if user_id not in commands_db:
-        await ctx.send("未檢測到有效命令。")
-        return
-    data = commands_db[user_id]
-    stats = get_user_stats(user_id)
-    if data["status"] != "待執行":
-        await ctx.send("命令已結束。")
-        return
-    data["status"] = "已完成"
-    stats["completed"] += 1
-    stats["stability"] = min(100, stats["stability"] + 2)
-    await ctx.send(f"[{TERMINAL_VERSION}]\n> 命令執行成功。\n> 偏移穩定。\n> 穩定度：{stats['stability']}\n> 狀態更新：已完成")
+    user = get_user(interaction.user.id)
+    completed, disobeyed, stability = user[1], user[2], user[3]
 
-@bot.command()
-async def 違抗(ctx):
-    user_id = ctx.author.id
-    if user_id not in commands_db:
-        await ctx.send("未檢測到有效命令。")
-        return
-    data = commands_db[user_id]
-    stats = get_user_stats(user_id)
-    if data["status"] != "待執行":
-        await ctx.send("命令已結束。")
-        return
-    data["status"] = "違抗"
-    stats["disobeyed"] += 1
-    stats["stability"] -= 10
-    await ctx.send(f"[{TERMINAL_VERSION}]\n⚠ 偵測到違抗行為。\n⚠ 偏移急遽上升。\n⚠ 穩定度下降至：{stats['stability']}\n⚠ 已標記為觀測對象。")
-    if stats["stability"] <= 20 or stats["disobeyed"] >= 5:
-        await judgement_event(ctx, stats)
+    completed += 1
+    stability = min(100, stability + 2)
 
-@bot.command()
-async def 狀態(ctx):
-    stats = get_user_stats(ctx.author.id)
-    rank = get_rank(stats)
-    msg = f"[{TERMINAL_VERSION}]\n階級：{rank}\n完成次數：{stats['completed']}\n違抗次數：{stats['disobeyed']}\n穩定度：{stats['stability']}"
-    if stats["stability"] == 0:
-        msg += "\n⚠ 系統警告：目標已被標記為清除對象。"
-    await ctx.send(msg)
+    update_user(interaction.user.id, completed, disobeyed, stability)
 
-# --- 自動逾期檢查 ---
-@tasks.loop(seconds=30)
-async def check_deadlines():
-    now = datetime.datetime.now()
-    for user_id, data in list(commands_db.items()):
-        if data["status"] == "待執行" and now > data["deadline"]:
-            stats = get_user_stats(user_id)
-            data["status"] = "違抗"
-            stats["disobeyed"] += 1
-            stats["stability"] -= 5
+    cursor.execute("UPDATE commands SET status='已完成' WHERE user_id=?", (interaction.user.id,))
+    conn.commit()
 
-@bot.event
+    await interaction.response.send_message("命令執行成功。")
+
+@tree.command(name="違抗", description="違抗命令")
+async def disobey(interaction: discord.Interaction):
+
+    user = get_user(interaction.user.id)
+    completed, disobeyed, stability = user[1], user[2], user[3]
+
+    disobeyed += 1
+    stability -= 10
+    if stability < 0:
+        stability = 0
+
+    update_user(interaction.user.id, completed, disobeyed, stability)
+
+    await interaction.response.send_message("⚠ 偵測到違抗。")
+
+@tree.command(name="狀態", description="查看狀態")
+async def status(interaction: discord.Interaction):
+
+    user = get_user(interaction.user.id)
+    rank = get_rank(user[3], user[2])
+
+    await interaction.response.send_message(f"""
+階級：{rank}
+完成：{user[1]}
+違抗：{user[2]}
+穩定度：{user[3]}
+""", ephemeral=True)
+
+# =========================
+
+@client.event
 async def on_ready():
-    print(f"食指命令分配系統 v6.1 已啟動：{bot.user}")
-    check_deadlines.start()
+    await tree.sync()
+    print("Index Terminal v8 已啟動")
 
-bot.run(TOKEN)
+client.run(TOKEN)
