@@ -11,7 +11,6 @@ import asyncio
 # =====================
 # 載入 Token & 初始化
 # =====================
-load_dotenv()
 TOKEN = os.getenv("bot_token")
 
 intents = discord.Intents.default()
@@ -267,3 +266,4 @@ async def on_ready():
     print(f"✅ {TERMINAL_VERSION} 已成功連線並啟動")
 
 bot.run(TOKEN)
+
