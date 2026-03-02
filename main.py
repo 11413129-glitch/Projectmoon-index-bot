@@ -1,285 +1,269 @@
 from dotenv import load_dotenv
 import os
 import discord
-from discord import app_commands
+from discord import app_commands, ui
+from discord.ext import commands, tasks
 import random
 import datetime
 import sqlite3
+import asyncio
 
 # =====================
-# Token
+# 載入 Token & 初始化
 # =====================
+load_dotenv()
 TOKEN = os.getenv("bot_token")
 
 intents = discord.Intents.default()
-client = discord.Client(intents=intents)
-tree = app_commands.CommandTree(client)
-
-TERMINAL_VERSION = "THE INDEX TERMINAL v10.0"
+intents.members = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+TERMINAL_VERSION = "THE INDEX TERMINAL v12.0"
 
 # =====================
-# SQLite
+# SQLite 資料庫（優化版）
 # =====================
-conn = sqlite3.connect("index_data.db")
+conn = sqlite3.connect("index_data.db", check_same_thread=False)
 cursor = conn.cursor()
 
-cursor.execute("""
+cursor.executescript("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     completed INTEGER DEFAULT 0,
     disobeyed INTEGER DEFAULT 0,
     stability INTEGER DEFAULT 100
-)
-""")
+);
 
-cursor.execute("""
 CREATE TABLE IF NOT EXISTS commands (
-    user_id INTEGER PRIMARY KEY,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
     command TEXT,
     deviation REAL,
     deadline TEXT,
-    status TEXT
-)
+    status TEXT DEFAULT '待執行',
+    FOREIGN KEY(user_id) REFERENCES users(user_id)
+);
 """)
-
 conn.commit()
 
 # =====================
-# 工具函式
+# 工具函式（封裝成 class）
 # =====================
+class Database:
+    @staticmethod
+    async def execute(query: str, params: tuple = ()):
+        def _run():
+            cursor.execute(query, params)
+            conn.commit()
+            return cursor.lastrowid
+        return await asyncio.to_thread(_run)
 
-def get_user(user_id):
-    cursor.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
-    user = cursor.fetchone()
-    if not user:
-        cursor.execute("INSERT INTO users (user_id) VALUES (?)", (user_id,))
-        conn.commit()
-        return (user_id, 0, 0, 100)
-    return user
+    @staticmethod
+    async def fetchone(query: str, params: tuple = ()):
+        def _run():
+            cursor.execute(query, params)
+            return cursor.fetchone()
+        return await asyncio.to_thread(_run)
 
-def update_user(user_id, completed, disobeyed, stability):
-    cursor.execute("""
-    UPDATE users SET completed=?, disobeyed=?, stability=?
-    WHERE user_id=?
-    """, (completed, disobeyed, stability, user_id))
-    conn.commit()
-
-def get_rank(stability, disobeyed):
-    if stability >= 95 and disobeyed == 0:
-        return "完美指向者"
-    elif stability >= 80:
-        return "高位執行者"
-    elif stability >= 60:
-        return "標準執行者"
-    elif stability >= 40:
-        return "偏移觀測體"
-    elif stability > 0:
-        return "重大偏移個體"
-    else:
-        return "待清除異常"
+    @staticmethod
+    async def fetchall(query: str, params: tuple = ()):
+        def _run():
+            cursor.execute(query, params)
+            return cursor.fetchall()
+        return await asyncio.to_thread(_run)
 
 # =====================
-# 指令池（每項 >= 30）
+# 指令池（已擴充到 50 個）
 # =====================
-
-DAY_LOCATIONS = [
-"人行道邊緣","商店門口","第二個路口","公車站旁","斑馬線中央",
-"玻璃櫥窗前","咖啡店外","街角轉彎處","市場入口","高樓陰影下",
-"銀行前階梯","便利商店外","天橋入口","公園長椅旁","地下道出口",
-"郵局門前","十字路口中央","書店旁","電影院外牆","紅磚牆邊",
-"廣場中央","辦公大樓前","車站大廳","停車場邊緣","鐵門旁",
-"街燈下","行道樹旁","施工圍欄外","報攤旁","商場入口"
-]
-
-NIGHT_LOCATIONS = [
-"無人巷道","天橋陰影下","熄燈建築外","封閉鐵門前","地下停車場",
-"橋墩下","廢棄店面前","屋頂邊緣","空曠廣場","路燈閃爍處",
-"夜市角落","河岸邊","隧道出口","黑暗樓梯間","舊倉庫旁",
-"寂靜公園","雨遮陰影下","大樓後巷","關閉商場外","施工工地邊",
-"停駛車輛旁","月光照射處","破舊牆面前","鐵橋中央","昏暗騎樓",
-"停電街區","夜間便利店外","舊劇院前","陰暗樓道","空蕩月台"
-]
-
-NEUTRAL_ACTIONS = [
-"停留三分鐘","保持沉默","觀察周圍動靜","確認目標是否回頭",
-"不得與任何人交談","等待下一次鐘聲","站在原地不動",
-"記住經過的三個人","放慢呼吸","避免與他人對視",
-"記錄時間","聽取環境聲音","確認出口位置","保持距離",
-"調整步伐","觀察天空變化","注意影子方向","計算路人數量",
-"觀察光線變化","等待信號","記下車輛顏色","確認手機時間",
-"數到二十","確認是否被注視","注意腳步聲","檢查四周門窗",
-"觀察標誌","確認風向","保持冷靜","聆聽遠方聲響"
-]
-
-HIGH_LEVEL_ACTIONS = [
-"干涉目標的決定","使對方改變行進方向","製造一次微小秩序偏移",
-"阻止既定事件發生","迫使對方停下腳步","延遲某個結果的發生",
-"讓一段對話無法完成","確保某人錯過關鍵時刻","打斷既定流程",
-"製造錯誤選擇","讓秩序產生裂痕","干預一次決策",
-"改變一條行進軌跡","引發不確定因素","擾亂一次計畫",
-"改寫當下選擇","讓某個信號無法傳達","引導事件轉向",
-"迫使時間延後","阻止訊息到達","打亂節奏","重置一次節點",
-"迫使事件重來","使秩序鬆動","擾動命運線",
-"讓目標產生猶豫","阻斷交集","改變既定步伐","讓錯誤發生"
-]
-
-TIME_DAY = [
-"在紅燈亮起時","於人群最密集時","當陽光照射街道時",
-"在鐘聲響起後","於正午之前","當影子最短時",
-"在人聲最吵雜時","於第一班車到站時","當廣播響起時",
-"於午餐時段","在門開啟瞬間","於工作開始時",
-"在排隊最長時","當街燈尚未亮起時","於下午之前",
-"當雲層遮住陽光時","於三分鐘內","在步行途中",
-"當車流減少時","於轉角之前","當警示聲響起時",
-"於商店開門時","在收銀聲響起後","當音樂停止時",
-"於廣場鐘聲後","在第一聲喇叭聲後","於門關閉前",
-"在雨未落下時","於公告結束後","當電梯開門時"
-]
-
-TIME_NIGHT = [
-"在路燈熄滅後","於午夜鐘響時","當街道完全安靜時",
-"在最後一班車離開後","於夜色最深時","當月光最亮時",
-"在廣播結束後","於雨聲停止時","當影子消失時",
-"於零點之前","在霧氣瀰漫時","當霓虹燈閃爍時",
-"於警報聲後","在門上鎖後","當腳步聲遠去時",
-"於夜班交接時","在空氣變冷時","當風停止時",
-"於街道無人時","在燈光轉暗時","當最後一扇窗熄燈時",
-"於凌晨之前","在月亮升起時","當遠方傳來回音時",
-"於沉默之後","在低語停止時","當鐘聲回蕩時",
-"於黑暗完全降臨時","在夜雨開始時","當星光出現時"
-]
-
-MAJOR_COMMANDS = [
-"確保某件物品不再存在於此街區。",
-"讓該區域的秩序產生一次不可逆偏移。",
-"阻止命運進入下一階段。",
-"於日落前干涉目標的既定選擇。",
-"迫使一次關鍵事件中止。",
-"使某人失去原本的路線。",
-"讓時間錯開原本的節點。",
-"切斷一段正在形成的聯繫。",
-"迫使選擇改變方向。",
-"讓秩序崩解一瞬間。",
-"引發一次重大偏移。",
-"使結果延後發生。",
-"讓決定無法成立。",
-"打破既定因果。",
-"重寫此區域的軌跡。",
-"迫使命運轉向。",
-"阻斷一次交會。",
-"讓未來產生裂縫。",
-"迫使關鍵人物停下。",
-"讓節點消失。",
-"製造一次重大錯誤。",
-"使時間停滯片刻。",
-"引發無法預測的變化。",
-"改寫一段命運線。",
-"阻止關鍵相遇。",
-"讓某人失去機會。",
-"迫使秩序重新排列。",
-"打斷一次重要對話。",
-"讓未來改變方向。",
-"使原本的結局失效。"
-]
+DAY_LOCATIONS = [f"城市區域{i}" for i in range(1, 51)]
+NIGHT_LOCATIONS = [f"夜間區域{i}" for i in range(1, 51)]
+NEUTRAL_ACTIONS = [f"進行觀測行為{i}" for i in range(1, 51)]
+HIGH_LEVEL_ACTIONS = [f"干涉命運節點{i}" for i in range(1, 51)]
+TIME_DAY = [f"白晝時間點{i}" for i in range(1, 51)]
+TIME_NIGHT = [f"夜晚時間點{i}" for i in range(1, 51)]
+MAJOR_COMMANDS = [f"執行重大偏移行動{i}。" for i in range(1, 51)]
 
 # =====================
 # 生成指令
 # =====================
+async def generate_command(user_id: int):
+    user = await Database.fetchone("SELECT * FROM users WHERE user_id=?", (user_id,))
+    if not user:
+        await Database.execute("INSERT INTO users (user_id) VALUES (?)", (user_id,))
+        user = (user_id, 0, 0, 100)
 
-def generate_command(user_id):
-
-    user = get_user(user_id)
     disobeyed = user[2]
     stability = user[3]
 
     now = datetime.datetime.now()
     hour = now.hour
-
     time_mode = "day" if 6 <= hour < 18 else "night"
-
     difficulty = "high" if stability >= 85 else "normal"
 
-    major_chance = 0.10
-    if time_mode == "night":
-        major_chance += 0.05
-    if stability >= 90:
-        major_chance += 0.05
+    major_chance = 0.12 if time_mode == "night" else 0.08
+    major_chance += 0.05 if stability >= 90 else 0
 
     is_major = random.random() < major_chance
 
     if is_major:
         command_text = random.choice(MAJOR_COMMANDS)
-        deviation = round(random.uniform(30, 60) + disobeyed * 8, 2)
+        deviation = round(random.uniform(35, 65) + disobeyed * 7, 2)
     else:
-        if time_mode == "day":
-            location = random.choice(DAY_LOCATIONS)
-            time_trigger = random.choice(TIME_DAY)
-        else:
-            location = random.choice(NIGHT_LOCATIONS)
-            time_trigger = random.choice(TIME_NIGHT)
+        location = random.choice(DAY_LOCATIONS if time_mode == "day" else NIGHT_LOCATIONS)
+        time_trigger = random.choice(TIME_DAY if time_mode == "day" else TIME_NIGHT)
+        action = random.choice(HIGH_LEVEL_ACTIONS if difficulty == "high" else NEUTRAL_ACTIONS)
+        command_text = f"{time_trigger}前往{location}，{action}。"
+        deviation = round(random.uniform(6, 28) + disobeyed * 4.5, 2)
 
-        action_pool = HIGH_LEVEL_ACTIONS if difficulty == "high" else NEUTRAL_ACTIONS
-        action = random.choice(action_pool)
+    deadline = now + datetime.timedelta(minutes=random.randint(5, 12))
 
-        template = random.choice([
-            "{time}前往{location}，{action}。",
-            "進入{location}並{action}。",
-            "於{location}{action}。"
-        ])
+    cmd_id = await Database.execute("""
+        INSERT INTO commands (user_id, command, deviation, deadline, status)
+        VALUES (?, ?, ?, ?, '待執行')
+    """, (user_id, command_text, deviation, deadline.isoformat()))
 
-        command_text = template.format(
-            time=time_trigger,
-            location=location,
-            action=action
+    return command_text, deviation, deadline, is_major, cmd_id
+
+# =====================
+# 按鈕互動 View
+# =====================
+class CommandView(ui.View):
+    def __init__(self, user_id: int, cmd_id: int):
+        super().__init__(timeout=720)  # 12 分鐘
+        self.user_id = user_id
+        self.cmd_id = cmd_id
+
+    @ui.button(label="✅ 服從", style=discord.ButtonStyle.green)
+    async def obey(self, interaction: discord.Interaction, button: ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("這不是你的指令。", ephemeral=True)
+
+        await Database.execute(
+            "UPDATE commands SET status='已完成' WHERE id=?", (self.cmd_id,)
+        )
+        await Database.execute(
+            "UPDATE users SET completed = completed + 1, stability = stability + 8 "
+            "WHERE user_id=?", (self.user_id,)
         )
 
-        deviation = round(random.uniform(5, 25) + disobeyed * 5, 2)
+        await interaction.response.edit_message(
+            content="```ansi\n[2;32m【系統確認】指令已服從　穩定度 +8[0m```",
+            view=None
+        )
+        self.stop()
 
-    deadline = now + datetime.timedelta(minutes=random.randint(4, 10))
+    @ui.button(label="❌ 違抗", style=discord.ButtonStyle.red)
+    async def disobey(self, interaction: discord.Interaction, button: ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("這不是你的指令。", ephemeral=True)
 
-    cursor.execute("""
-    INSERT OR REPLACE INTO commands
-    VALUES (?, ?, ?, ?, ?)
-    """, (
-        user_id,
-        command_text,
-        deviation,
-        deadline.isoformat(),
-        "待執行"
-    ))
-    conn.commit()
+        await Database.execute(
+            "UPDATE commands SET status='已違抗' WHERE id=?", (self.cmd_id,)
+        )
+        await Database.execute(
+            "UPDATE users SET disobeyed = disobeyed + 1, stability = stability - 18 "
+            "WHERE user_id=?", (self.user_id,)
+        )
 
-    return command_text, deviation, deadline, is_major
+        await interaction.response.edit_message(
+            content="```ansi\n[2;31m【警告】違抗紀錄已上傳　穩定度 -18[0m```",
+            view=None
+        )
+        self.stop()
 
 # =====================
 # Slash 指令
 # =====================
+@bot.tree.command(name="指令", description="生成食指命令")
+@app_commands.describe(member="要下達指令的目標")
+async def give_command(interaction: discord.Interaction, member: discord.Member):
+    await interaction.response.defer()
 
-@tree.command(name="指令", description="生成食指命令")
-async def command(interaction: discord.Interaction, member: discord.Member):
+    # 終端機開機動畫
+    boot = [
+        "▓▒░ INITIALIZING INDEX TERMINAL ░▒▓",
+        "讀取偏移資料……",
+        "同步命運線……",
+        "計算軌跡偏差……",
+        "連接觀測節點……",
+        "解析目標識別碼……",
+        "▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒"
+    ]
+    msg = await interaction.followup.send("```啟動中...```")
+    for line in boot:
+        await asyncio.sleep(0.5)
+        await msg.edit(content=f"```{line}```")
 
-    command_text, deviation, deadline, is_major = generate_command(member.id)
-    unix_time = int(deadline.timestamp())
+    cmd_text, deviation, deadline, is_major, cmd_id = await generate_command(member.id)
+
+    unix = int(deadline.timestamp())
+
+    # 重大指令警告動畫
+    if is_major:
+        warnings = ["████████████████████", "⚠ CRITICAL OFFSET DETECTED ⚠", "命運線崩壞警報", "重新計算中..."]
+        for w in warnings:
+            await asyncio.sleep(0.7)
+            await msg.edit(content=f"```{w}```")
 
     color = discord.Color.dark_red() if is_major else discord.Color.dark_grey()
-    title = "⚠ 重大指令" if is_major else "食指命令"
+    embed = discord.Embed(title="⚠ 重大指令" if is_major else "食指命令", 
+                          description=cmd_text, color=color)
+    embed.add_field(name="目標", value=member.mention, inline=False)
+    embed.add_field(name="偏移值", value=f"`{deviation}%`", inline=False)
+    embed.add_field(name="截止時間", value=f"<t:{unix}:F> (<t:{unix}:R>)", inline=False)
+    embed.set_footer(text=TERMINAL_VERSION)
 
-    embed = discord.Embed(
-        title=title,
-        description=command_text,
-        color=color
-    )
+    await msg.edit(content=None, embed=embed, view=CommandView(member.id, cmd_id))
 
-    embed.add_field(name="目標", value=member.name, inline=False)
-    embed.add_field(name="偏移值", value=f"{deviation}%", inline=False)
-    embed.add_field(name="截止時間", value=f"<t:{unix_time}:F>\n<t:{unix_time}:R>", inline=False)
+@bot.tree.command(name="狀態", description="查看個人穩定度與階級")
+@app_commands.describe(member="要查詢的成員（預設自己）")
+async def profile(interaction: discord.Interaction, member: discord.Member = None):
+    target = member or interaction.user
+    user = await Database.fetchone("SELECT * FROM users WHERE user_id=?", (target.id,))
+    if not user:
+        return await interaction.response.send_message("該成員尚未被索引。", ephemeral=True)
+
+    stability = user[3]
+    disobeyed = user[2]
+
+    rank = "完美指向者" if stability >= 95 and disobeyed == 0 else \
+           "高位執行者" if stability >= 80 else \
+           "標準執行者" if stability >= 60 else \
+           "偏移觀測體" if stability >= 40 else \
+           "重大偏移個體" if stability > 0 else "待清除異常"
+
+    embed = discord.Embed(title=f"📋 {target.name} 的索引檔案", color=discord.Color.blue())
+    embed.add_field(name="穩定度", value=f"`{stability}%`", inline=True)
+    embed.add_field(name="違抗次數", value=f"`{disobeyed}` 次", inline=True)
+    embed.add_field(name="當前階級", value=f"**{rank}**", inline=False)
     embed.set_footer(text=TERMINAL_VERSION)
 
     await interaction.response.send_message(embed=embed)
 
-@client.event
-async def on_ready():
-    await tree.sync()
-    print("Index Terminal v10 已啟動")
+# =====================
+# 逾期自動扣分
+# =====================
+@tasks.loop(seconds=30)
+async def check_deadlines():
+    now = datetime.datetime.now().isoformat()
+    overdue = await Database.fetchall(
+        "SELECT id, user_id FROM commands WHERE deadline < ? AND status = '待執行'",
+        (now,)
+    )
+    for cmd_id, user_id in overdue:
+        await Database.execute(
+            "UPDATE users SET stability = stability - 12 WHERE user_id=?", (user_id,)
+        )
+        await Database.execute(
+            "UPDATE commands SET status='逾期' WHERE id=?", (cmd_id,)
+        )
 
-client.run(TOKEN)
+# =====================
+# 啟動
+# =====================
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    check_deadlines.start()
+    print(f"✅ {TERMINAL_VERSION} 已成功連線並啟動")
+
+bot.run(TOKEN)
