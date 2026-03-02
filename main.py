@@ -1,6 +1,7 @@
-# =====================
-# THE INDEX TERMINAL v13.0
-# =====================
+# ==============================
+# THE INDEX TERMINAL v13.1
+# Railway Stable Edition
+# ==============================
 
 from dotenv import load_dotenv
 import os
@@ -13,20 +14,22 @@ import sqlite3
 import asyncio
 
 # =====================
-# 載入 Token
+# 環境變數
 # =====================
 
 load_dotenv()
 TOKEN = os.getenv("bot_token")
 
-TERMINAL_VERSION = "THE INDEX TERMINAL v13.0"
+if not TOKEN:
+    raise ValueError("❌ bot_token 未設定，請在 Railway Variables 設定")
+
+TERMINAL_VERSION = "THE INDEX TERMINAL v13.1"
 
 # =====================
-# Discord 初始化
+# Discord 初始化（無特權 intents）
 # =====================
 
 intents = discord.Intents.default()
-intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # =====================
@@ -34,9 +37,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # =====================
 
 conn = sqlite3.connect("index_data.db", check_same_thread=False)
-
-def clamp(value, min_v=0, max_v=100):
-    return max(min_v, min(max_v, value))
 
 class Database:
 
@@ -65,7 +65,6 @@ class Database:
             return cur.fetchall()
         return await asyncio.to_thread(_run)
 
-# 建表
 async def init_db():
     await Database.execute("""
     CREATE TABLE IF NOT EXISTS users (
@@ -124,7 +123,7 @@ async def generate_command(user_id: int):
     is_day = 6 <= hour < 18
     difficulty_high = stability >= 85
 
-    # 改良重大指令機率（更平衡）
+    # 平衡後重大指令機率
     major_chance = 0.06
     if not is_day:
         major_chance += 0.05
@@ -226,7 +225,6 @@ async def give_command(interaction: discord.Interaction, member: discord.Member)
     msg = await interaction.followup.send("```INITIALIZING...```")
 
     cmd_text, deviation, deadline, is_major, cmd_id = await generate_command(member.id)
-
     unix = int(deadline.timestamp())
 
     color = discord.Color.dark_red() if is_major else discord.Color.dark_grey()
@@ -260,15 +258,6 @@ async def profile(interaction: discord.Interaction, member: discord.Member = Non
 
     stability, disobeyed = user
 
-    rank = (
-        "完美指向者" if stability >= 95 and disobeyed == 0 else
-        "高位執行者" if stability >= 80 else
-        "標準執行者" if stability >= 60 else
-        "偏移觀測體" if stability >= 40 else
-        "重大偏移個體" if stability > 0 else
-        "待清除異常"
-    )
-
     embed = discord.Embed(
         title=f"{target.name} 的索引檔案",
         color=discord.Color.blue()
@@ -276,13 +265,12 @@ async def profile(interaction: discord.Interaction, member: discord.Member = Non
 
     embed.add_field(name="穩定度", value=f"`{stability}%`")
     embed.add_field(name="違抗次數", value=f"`{disobeyed}` 次")
-    embed.add_field(name="階級", value=f"**{rank}**", inline=False)
     embed.set_footer(text=TERMINAL_VERSION)
 
     await interaction.response.send_message(embed=embed)
 
 # =====================
-# 逾期扣分
+# 逾期檢查
 # =====================
 
 @tasks.loop(seconds=30)
@@ -317,6 +305,6 @@ async def on_ready():
     await init_db()
     await bot.tree.sync()
     check_deadlines.start()
-    print(f"✅ {TERMINAL_VERSION} 已啟動")
+    print(f"✅ {TERMINAL_VERSION} 已成功啟動")
 
 bot.run(TOKEN)
